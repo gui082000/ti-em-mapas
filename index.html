@@ -23,6 +23,94 @@
     /></noscript>
     <!-- End Meta Pixel Code -->
 
+<!-- Tracking painel: identificação de visitante (trck_user_id, UTMs, fbp/fbc) -->
+<script src="https://dados.fitconsciente.online/tracker.js"></script>
+
+<!-- trackEvent: dispara client-side (fbq/gtag, com eventID pra dedupe) e server-side
+     (/api/event, que reencaminha pro Meta CAPI e, se não pedir skip_ga4, pro GA4 MP).
+     Diferente da LP www.fitconsciente.online: aqui o Pixel só é inicializado (fbq('init', id))
+     depois que scripts/dynamic-config.js busca o pixelId em /api/config — por isso o PageView
+     não dispara aqui (ficaria na fila do fbq antes do init, fora de ordem). Quem dispara o
+     PageView é o próprio dynamic-config.js, logo depois do fbq('init', ...). -->
+<script>
+(function () {
+  var PAINEL_BASE = "https://dados.fitconsciente.online";
+  window.PAINEL_BASE = PAINEL_BASE;
+
+  window.trackEvent = function (eventName, contentName, fbData, opts) {
+    opts = opts || {};
+    var eventId = crypto.randomUUID();
+
+    if (typeof fbq === "function") {
+      fbq("track", eventName, fbData || {}, { eventID: eventId });
+    }
+    if (opts.gtagEvent && typeof gtag === "function") {
+      gtag("event", opts.gtagEvent, opts.gtagData || {});
+    }
+
+    fetch(PAINEL_BASE + "/api/event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      keepalive: !!opts.keepalive,
+      body: JSON.stringify({
+        event_name: eventName,
+        event_id: eventId,
+        trck_user_id: window.trckUserId,
+        content_name: contentName,
+        value: fbData && fbData.value,
+        currency: fbData && fbData.currency,
+        event_source_url: window.location.href,
+        skip_ga4: !!opts.gtagEvent || !!opts.skipGa4,
+      }),
+    }).catch(function () {
+      // Falha de rede não deve travar o funil nem o redirect do checkout.
+    });
+  };
+})();
+</script>
+
+<!-- GA4 (Measurement Protocol config, carregado dinamicamente do painel) -->
+<script>
+(function () {
+  fetch("https://dados.fitconsciente.online/api/ga4-config")
+    .then(function (res) { return res.ok ? res.json() : null; })
+    .then(function (data) {
+      if (!data || !data.measurement_ids || !data.measurement_ids.length) return;
+      window.dataLayer = window.dataLayer || [];
+      window.gtag = function () { dataLayer.push(arguments); };
+      gtag("js", new Date());
+      var mainId = data.measurement_ids[0];
+      var s = document.createElement("script");
+      s.async = true;
+      s.src = "https://www.googletagmanager.com/gtag/js?id=" + mainId;
+      document.head.appendChild(s);
+      data.measurement_ids.forEach(function (id) { gtag("config", id); });
+
+      // Segunda chamada ao /api/identify com o client_id/session_id REAIS do GA4 (gtag('get', ...)
+      // é o jeito oficial de ler isso, evita parsear cookie _ga na mão). Sem isso, todo evento que
+      // vai pro GA4 server-side usa um client_id sintético (o próprio trck_user_id), desconectado
+      // da sessão real do visitante no GA4. upsert_visitor faz coalesce por campo — chamada extra
+      // é segura, não sobrescreve UTM/fbp/fbc já capturados.
+      gtag("get", mainId, "client_id", function (clientId) {
+        gtag("get", mainId, "session_id", function (sessionId) {
+          fetch(window.PAINEL_BASE + "/api/identify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              trck_user_id: window.trckUserId,
+              ga_client_id: clientId,
+              ga_session_id: sessionId,
+            }),
+          }).catch(function () {});
+        });
+      });
+    })
+    .catch(function () {
+      // Falha de rede não deve quebrar a landing page.
+    });
+})();
+</script>
+
 
     
   
