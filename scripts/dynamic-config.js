@@ -16,6 +16,14 @@
     "checkout-premium-downsell": 27.9,
   };
 
+  // Protege contra duplo clique (comum quando a navegação não é instantânea e
+  // a pessoa clica de novo) disparando o mesmo evento 2x com event_id
+  // diferente — o Meta não deduplica isso. Debounce por id do botão: o mesmo
+  // botão não dispara de novo dentro da janela, mas um botão diferente
+  // dispara normalmente mesmo que seja quase ao mesmo tempo.
+  var recentFires = new Map();
+  var DEBOUNCE_MS = 1500;
+
   function applyPixel(id) {
     if (!id || typeof window.fbq !== "function") return;
     window.fbq("init", id);
@@ -66,17 +74,24 @@
         var contentName = CONTENT_NAMES[id] || id;
         var value = VALUES[id];
 
-        if (window.trackEvent) {
-          window.trackEvent(
-            "InitiateCheckout",
-            contentName,
-            { value: value, currency: "BRL", content_name: contentName },
-            {
-              gtagEvent: "begin_checkout",
-              gtagData: { value: value, currency: "BRL", items: [{ item_name: contentName }] },
-              keepalive: true,
-            },
-          );
+        var now = Date.now();
+        var lastFired = recentFires.get(id);
+        var isDebounced = lastFired && now - lastFired < DEBOUNCE_MS;
+        if (!isDebounced) {
+          recentFires.set(id, now);
+
+          if (window.trackEvent) {
+            window.trackEvent(
+              "InitiateCheckout",
+              contentName,
+              { value: value, currency: "BRL", content_name: contentName },
+              {
+                gtagEvent: "begin_checkout",
+                gtagData: { value: value, currency: "BRL", items: [{ item_name: contentName }] },
+                keepalive: true,
+              },
+            );
+          }
         }
 
         window.setTimeout(function () {
